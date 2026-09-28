@@ -747,7 +747,30 @@ details.note p{margin:.6em 0}
 #legend .row{display:flex;align-items:center;gap:6px;margin:2px 0}
 #legend .ramp{height:10px;border-radius:2px;margin:3px 0}
 #legend .ticks{display:flex;justify-content:space-between;color:var(--text2)}
-#searchbox{top:10px;right:10px;padding:0;width:280px}
+#searchbox{top:10px;right:10px;padding:0;width:280px;z-index:620}
+/* composición del voto a lo largo de las elecciones */
+#compwin{top:52px;right:10px;width:440px;display:flex;flex-direction:column;max-height:calc(100% - 140px)}
+#compwin .winhead{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:10px 12px 8px}
+#compwin h2{font-family:var(--serif);font-weight:500;font-size:16px;line-height:1.15;margin:0}
+#compwin .lab{margin:0 0 1px}
+#compwin .winbody{min-height:0;overflow:auto}
+#compwin.collapsed .winbody{display:none}
+#compwin.collapsed{width:auto}
+.evolution{display:grid;gap:8px;padding:2px 12px 4px}
+.evitem{cursor:pointer;min-width:0;border-radius:3px}
+.evitem:focus-visible{outline:2px solid #294075;outline-offset:2px}
+.cstack{height:110px;display:flex;flex-direction:column-reverse;background:var(--surf3);border-radius:3px;overflow:hidden}
+.cseg{min-height:0;flex-shrink:0}
+.evitem.on .cstack{outline:2px solid var(--text);outline-offset:3px}
+.evitem.none{cursor:default}
+.evyear{margin-top:7px;font-size:12.5px}
+.evitem.on .evyear{font-weight:600}
+.evnumber{font-size:9.5px;color:var(--text2);margin-top:3px;line-height:1.35;overflow-wrap:anywhere}
+.evwin{display:flex;align-items:center;gap:4px;font-size:9.5px;margin-top:2px;min-width:0}
+.evwin i{width:8px;height:8px;border-radius:2px;flex:0 0 8px}
+.evwin span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#compwin .subnote{padding:0 12px 10px;margin:6px 0 0;font-size:10.5px;color:var(--text2);font-weight:300}
+@media (max-width:1100px){#compwin{width:360px}.cstack{height:90px}.evolution{gap:6px}}
 #sugg{display:none;border-top:1px solid var(--border);max-height:50vh;overflow-y:auto}
 .sg{padding:7px 11px;cursor:pointer;font-size:12.5px;line-height:1.3;border-bottom:1px solid var(--surf3)}
 .sg:hover{background:var(--surf2)}
@@ -775,6 +798,8 @@ details.note p{margin:.6em 0}
   #legend{bottom:14px;left:8px;max-width:170px;font-size:10px;padding:7px 9px}
   #legend .xtra{display:none}
   #info{left:10px;right:10px;bottom:auto;top:52px;max-width:none}
+  #compwin{left:10px;right:10px;width:auto;max-height:calc(100% - 70px)}
+  .cstack{height:80px}
   .sec{padding:12px 14px}
   .seg button{padding:7px 10px}
 }
@@ -829,6 +854,10 @@ details.note p{margin:.6em 0}
   </aside>
   <div id="mapwrap">
     <div id="map" role="application" aria-label="Mapa de resultados"></div>
+    <section class="ov" id="compwin" aria-label="Composición del voto en cada elección">
+      <div class="winhead"><div><p class="lab" id="cwLab">Composición del voto</p><h2 id="cwTitle">Colombia</h2></div><button class="mini" id="cwTog" aria-expanded="true">Minimizar</button></div>
+      <div class="winbody"><div class="evolution" id="evolution"></div><p class="subnote" id="cwNote"></p></div>
+    </section>
     <div class="ov" id="searchbox"><input id="search" placeholder="Buscar municipio, puesto o candidato" autocomplete="off" aria-label="Buscar municipio, puesto o candidato"><div id="sugg" role="listbox"></div></div>
     <div class="ov" id="legend"></div>
     <div class="ov" id="info"></div>
@@ -1785,6 +1814,93 @@ function ethLine(el, u) {
   var s = ethSplit(el, u); if (!s) return '';
   return '<div class="s">' + pct(s.cur / s.tot, 1) + ' de la tarjeta a la circ. ' + s.cfg.lab + ' · ' + pct(s.main / s.tot, 1) + ' a la principal</div>';
 }
+// ---------- composición del voto en cada elección (ventana superior derecha) ----------
+// A puesto is followed across years through its DIVIPOL master index (PU[i][9]), so the same place is compared.
+var PIDX = {}, TERRJ = {}, CW = { open: !window.matchMedia('(max-width:760px)').matches };
+function puIndexMap(y) {
+  if (!PIDX[y]) { var m = {}, arr = DATA.puestos[y] || []; for (var j = 0; j < arr.length; j++) m[arr[j][0]] = j; PIDX[y] = m; }
+  return PIDX[y];
+}
+function terrJs(y, kind) {
+  var key = y + kind;
+  if (!TERRJ[key]) { var H = DATA.terr[kind] || {}, arr = DATA.puestos[y] || [], out = {}, t; for (var j = 0; j < arr.length; j++) { t = H[arr[j][0]]; if (t !== undefined) (out[t] || (out[t] = [])).push(j); } TERRJ[key] = out; }
+  return TERRJ[key];
+}
+function elecLike(y) { // the election of year y comparable with the one on screen
+  var es = elsFor(y, S.corp), i, alt = { PRE: 'PRE1', PRE1: 'PRE' }[S.eid];
+  for (i = 0; i < es.length; i++) if (es[i].id === S.eid) return es[i];
+  for (i = 0; i < es.length; i++) if (es[i].id === alt) return es[i];
+  return null;
+}
+function recFor(el, y, u) {
+  prep(el);
+  if (!u) return accToRec(el.natAgg);
+  if (u.t === 'm') return muniRec(el, u.id) || null;
+  if (!DATA.years[y].hasPuestos || !el.puD) return null;
+  if (u.t === 'p') { var j = puIndexMap(y)[PU[u.i][9]]; return j === undefined ? null : refPuRec(el, y, j); }
+  if (u.t === 't') {
+    var acc = null;
+    (terrJs(y, u.k)[u.i] || []).forEach(function (j) { var r = refPuRec(el, y, j); if (r) { if (!acc) acc = emptyAcc(); addRec(acc, r); } });
+    return acc ? accToRec(acc) : null;
+  }
+  return null;
+}
+function unitName(u) {
+  if (!u) return 'Colombia';
+  if (u.t === 'm') return (DATA.mn[u.id] || u.id) + ', ' + (DATA.dn[DEPT_OF(u.id)] || '');
+  if (u.t === 'p') return (PU[u.i][4] || 'Puesto') + ' · ' + (DATA.mn[PU[u.i][0]] || '');
+  if (u.t === 't') return terrProps(u).nm || TLAB[u.k];
+  return 'Colombia';
+}
+function renderComp() {
+  var box = document.getElementById('compwin'); if (!box) return;
+  var cur = elec(), u = S.sel || null, ys = YEARS.slice();
+  box.className = 'ov' + (CW.open ? '' : ' collapsed');
+  var tog = document.getElementById('cwTog'); tog.textContent = CW.open ? 'Minimizar' : 'Mostrar'; tog.setAttribute('aria-expanded', CW.open ? 'true' : 'false');
+  document.getElementById('cwLab').textContent = 'Composición del voto · ' + (CORPLAB[S.corp] || S.corp) + (elsFor(S.year, S.corp).length > 1 ? ' · ' + cur.label : '');
+  document.getElementById('cwTitle').textContent = unitName(u);
+  if (!CW.open) return;
+  var h = '', seen = 0;
+  ys.forEach(function (y) {
+    var el = elecLike(y), rec = null;
+    if (el) rec = y === S.year && el === cur ? unitRec(prep(el), u || { t: 'n' }) : recFor(el, y, u);
+    var segs = '', win = '', num;
+    if (rec && rec[0] > 0) {
+      seen++;
+      var parts = [];
+      for (var j = 6; j < rec.length; j += 2) parts.push([rec[j], rec[j + 1]]);
+      if (rec[1] > 0) parts.push([-2, rec[1]]);
+      parts.sort(function (a, b) { return b[1] - a[1]; });
+      parts.forEach(function (p) {
+        var sh = p[1] / rec[0]; if (sh < 0.002) return;
+        segs += '<div class="cseg" title="' + esc(nameOf(el, p[0]) + ': ' + pct(sh) + ' (' + fmt(p[1]) + ' votos)') + '" style="height:' + (sh * 100).toFixed(2) + '%;background:' + colorOf(el, p[0]) + '"></div>';
+      });
+      win = '<div class="evwin" title="' + esc(nameOf(el, parts[0][0])) + '"><i style="background:' + colorOf(el, parts[0][0]) + '"></i><span>' + pct(parts[0][1] / rec[0], 0) + ' ' + esc(nameOf(el, parts[0][0])) + '</span></div>';
+      num = '<span title="' + fmt(rec[0]) + ' votos válidos">' + (rec[0] >= 1e6 ? (rec[0] / 1e6).toFixed(2).replace('.', ',') + ' M' : rec[0] >= 1e5 ? Math.round(rec[0] / 1e3) + ' mil' : fmt(rec[0])) + '</span> válidos';
+    } else num = !el ? 'Sin esta elección' : ((el.missing || {})[u && u.t === 'm' ? DEPT_OF(u.id) : ''] ? 'Sin datos en la fuente' : (u && u.t !== 'm' && !DATA.years[y].hasPuestos ? 'Sin datos por puesto' : 'Sin datos'));
+    h += '<div class="evitem' + (y === S.year ? ' on' : '') + (el ? '' : ' none') + '" data-y="' + y + '"' + (el ? ' tabindex="0" role="button"' : '') + ' aria-label="' + esc(y + ': ' + (rec && rec[0] > 0 ? fmt(rec[0]) + ' votos válidos' : num)) + '">' +
+      '<div class="cstack">' + segs + '</div><div class="evyear">' + y + '</div>' + win + '<div class="evnumber">' + num + '</div></div>';
+  });
+  var ev = document.getElementById('evolution');
+  ev.style.gridTemplateColumns = 'repeat(' + ys.length + ',minmax(0,1fr))';
+  ev.innerHTML = h;
+  var items = ev.querySelectorAll('.evitem[tabindex]');
+  for (var i = 0; i < items.length; i++) {
+    items[i].onclick = function () { goYear(this.getAttribute('data-y')); };
+    items[i].onkeydown = function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goYear(this.getAttribute('data-y')); } };
+  }
+  document.getElementById('cwNote').textContent = 'Porcentaje sobre votos válidos; el gris es el voto en blanco. Toca un año para verlo en el mapa.' +
+    (u && u.t === 'p' ? ' El puesto se compara con el mismo lugar de votación en las otras elecciones, cuando se pudo ubicar.' : '') +
+    (u && u.t === 't' ? ' El territorio suma los puestos ubicados dentro de él en cada elección.' : '') +
+    (!seen ? ' Sin datos para esta selección.' : '');
+}
+function goYear(y) {
+  if (y === S.year) return;
+  var t = elecLike(y);
+  setYear(y);
+  if (t && S.eid !== t.id) setElec(t.id);
+}
+document.getElementById('cwTog').onclick = function () { CW.open = !CW.open; renderComp(); };
 function detailCand(el, u, acc) {
   if (!el.cand) return '';
   var st = candState(el);
@@ -1923,7 +2039,7 @@ function select(u) {
     var mid = u.t === 'm' ? u.id : PU[u.i][0];
     if (MLAYER[mid]) selOutline.addData(MLAYER[mid].feature);
   }
-  renderDetail();
+  renderDetail(); renderComp();
   if (!S.panel) { if (u) miniCard(u); else { info._pin = false; info.style.display = 'none'; info.style.pointerEvents = 'none'; } }
   if (u && S.panel && window.matchMedia('(max-width:760px)').matches) {
     var ds = document.getElementById('detailSec'); var main = document.getElementById('main');
@@ -1987,7 +2103,7 @@ var buildSearchIndex = null;
       select({ t: 't', k: r.k, i: r.i });
     } else if (r.t === 'm') {
       map.fitBounds(MLAYER[r.id].getBounds(), { maxZoom: 11, padding: [20, 20] });
-      if (S.level === 'muni') select({ t: 'm', id: r.id }); else { S.sel = { t: 'm', id: r.id }; selOutline.clearLayers(); selOutline.addData(MLAYER[r.id].feature); renderDetail(); }
+      if (S.level === 'muni') select({ t: 'm', id: r.id }); else { S.sel = { t: 'm', id: r.id }; selOutline.clearLayers(); selOutline.addData(MLAYER[r.id].feature); renderDetail(); renderComp(); }
     } else {
       if (S.level !== 'pu') { S.level = 'pu'; refresh(); }
       map.setView([PU[r.i][1], PU[r.i][2]], Math.max(map.getZoom(), 14));
@@ -2011,7 +2127,13 @@ function setYear(y) {
   for (var i = 0; i < els.length; i++) if (els[i].id === prevE) ok = true;
   if (!ok) S.eid = els[0].id;
   if (!DATA.years[y].hasPuestos) S.level = 'muni';
-  remapParty(prevName); S.sel = S.sel && S.sel.t === 'm' ? S.sel : null; refresh();
+  var ps = S.sel;
+  if (ps && ps.t === 'p') { // keep the same place of voting when it exists in the new year
+    var nj = puIndexMap(y)[PU[ps.i][9]];
+    S.sel = nj !== undefined && DATA.years[y].hasPuestos ? { t: 'p', i: nj } : null;
+  } else S.sel = ps && (ps.t === 'm' || ps.t === 't') ? ps : null;
+  if (!S.sel) { selOutline.clearLayers(); selRing.setStyle({ opacity: 0 }); }
+  remapParty(prevName); refresh();
 }
 function setElec(id) { if (id === S.eid) return; var prevName = S.party !== null ? nameOf(elec(), S.party) : null; S.eid = id; remapParty(prevName); refresh(); }
 function remapParty(prevName) {
@@ -2037,7 +2159,7 @@ function refresh() {
     else { if (S.cand === null) S.cand = 0; loadCand(el, candAfterLoad); }
   }
   computeDomains(el);
-  renderControls(); styleAll(); renderNational(); renderDetail();
+  renderControls(); styleAll(); renderNational(); renderDetail(); renderComp();
 }
 document.getElementById('panelTog').onclick = function () {
   S.panel = !S.panel;
